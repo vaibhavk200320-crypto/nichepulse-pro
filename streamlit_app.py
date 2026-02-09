@@ -13,24 +13,28 @@ st.set_page_config(
 st.markdown("""
     <style>
     .stButton>button { width: 100%; border-radius: 5px; }
-    .st-expander { border: none !important; box-shadow: none !important; }
+    [data-testid="stMetricValue"] { font-size: 24px; }
+    .news-card { padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 # ---------------- 2. CONSTANTS & CACHING ----------------
 FREE_LIMIT = 10
 
-@st.cache_data(ttl=600)  # Remembers results for 10 mins to save speed/API calls
+@st.cache_data(ttl=600)
 def fetch_news(url):
     return feedparser.parse(url)
 
 # ---------------- 3. SESSION STATE ----------------
+# Added missing variables to prevent KeyErrors
 if "search_count" not in st.session_state:
     st.session_state.search_count = 0
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
 if "last_query" not in st.session_state:
     st.session_state.last_query = ""
+if "notify_clicks" not in st.session_state:
+    st.session_state.notify_clicks = 0
 
 # ---------------- 4. AUTHENTICATION GATE ----------------
 if not st.session_state.user_email:
@@ -53,7 +57,7 @@ with st.sidebar:
     st.info(f"User: {st.session_state.user_email}")
     
     st.divider()
-    region = st.selectbox("Region", ["en-US", "en-IN", "en-GB", "en-CA", "en-AU"])
+    region = st.selectbox("Region", ["en-IN", "en-US", "en-GB", "en-CA", "en-AU"])
     timeframe = st.selectbox("Recency", ["anytime", "1h", "24h", "7d", "30d"])
     num_articles = st.slider("Articles per view", 4, 30, 10)
     
@@ -72,56 +76,75 @@ col1.metric("Searches Used", f"{st.session_state.search_count} / {FREE_LIMIT}")
 col2.metric("Current Region", region.split("-")[1])
 col3.metric("Account Type", "Free Beta" if remaining > 0 else "Limit Reached")
 
-# ---------------- 7. SEARCH INPUT ----------------
-niche = st.text_input("🔍 What niche are we monitoring today?", placeholder="e.g. 'Solid State Batteries' or 'Local Elections'")
+# ---------------- 7. MAIN LOGIC ----------------
+niche = st.text_input(
+    "What niche are we monitoring today?",
+    placeholder="e.g. 'Solid State Batteries' or 'Local Elections'")
 
-# ---------------- 8. MAIN LOGIC ----------------
 if niche:
-    # Check Limit
-    if st.session_state.search_count >= FREE_LIMIT:
-        st.error("🚨 **Search Limit Reached.** Upgrade to Pro for unlimited daily searches.")
-        if st.button("Get Notified for Pro Launch"):
-            st.toast("We've added you to the waitlist!", icon="📧")
-    else:
-        # Build Query with recency filter
-        query = niche
-        if timeframe != "anytime":
-            query += f" when:{timeframe}"
-            
-        encoded = urllib.parse.quote(query)
-        hl, gl = region.split("-")
-        rss_url = f"https://news.google.com/rss/search?q={encoded}&hl={hl}&gl={gl}&ceid={gl}:{hl}"
+    # 1. Check if the query is NEW (to avoid double-charging searches on refresh)
+    is_new_query = niche.lower() != st.session_state.last_query.lower()
 
-        with st.spinner(f"Scanning for '{niche}'..."):
-            feed = fetch_news(rss_url)
-            
-            # Count only if it's a new search term
-            if niche.lower() != st.session_state.last_query.lower():
-                st.session_state.search_count += 1
-                st.session_state.last_query = niche
+    # 2. LIMIT CHECK (Trigger only if they try a NEW search while at the limit)
+    if st.session_state.search_count >= FREE_LIMIT and is_new_query:
+        st.error("Free limit reached")
+        
+        st.markdown(f"""
+        ### 🚀 Pro Access Required
+        You've used all **{FREE_LIMIT} free searches** for today.
+        
+        **Pro includes:**
+        - Unlimited niche & local searches
+        - No daily limits
+        - Priority features
+        
+        #### 💎 Pro Plan (Launching Soon)
+        * **₹139 / month**
+        * **₹399 / 3 months** *(Save ₹18!)*
+        """)
 
-            if feed.entries:
-                # Layout results in a clean 2-column grid
-                grid = st.columns(2)
-                for i, item in enumerate(feed.entries[:num_articles]):
-                    with grid[i % 2]:
-                        with st.container(border=True):
-                            # Advanced Parsing: rsplit from right keeps hyphenated headlines intact
-                            parts = item.title.rsplit(" - ", 1)
-                            headline = parts[0]
-                            source = parts[1] if len(parts) > 1 else "Unknown Source"
-                            
-                            st.markdown(f"**{headline}**")
-                            st.caption(f"📍 {source} | 🕒 {item.published[:16]}")
-                            st.link_button("Read Source", item.link, use_container_width=True)
-            else:
-                st.warning("No articles found for this specific query. Try a broader keyword.")
+        if st.button("🔔 Notify me when Pro launches"):
+            st.success(f"✅ Thanks! We'll notify {st.session_state.user_email}")
+        st.stop()
 
-# ---------------- 9. FOOTER / FEEDBACK ----------------
+    # 3. UPDATE SEARCH COUNT (Only for new words)
+    if is_new_query:
+        st.session_state.search_count += 1
+        st.session_state.last_query = niche
+
+    # 4. BUILD QUERY & FETCH
+    query = niche
+    if timeframe != "anytime":
+        query += f" when:{timeframe}"
+
+    encoded = urllib.parse.quote(query)
+    hl, gl = region.split("-")
+    rss_url = f"https://news.google.com/rss/search?q={encoded}&hl={hl}&gl={gl}&ceid={gl}:{hl}"
+
+    with st.spinner(f"Scanning for '{niche}'..."):
+        feed = fetch_news(rss_url)
+
+        if feed.entries:
+            cols = st.columns(2)
+            for i, item in enumerate(feed.entries[:num_articles]):
+                with cols[i % 2]:
+                    with st.container(border=True):
+                        parts = item.title.rsplit(" - ", 1)
+                        headline = parts[0]
+                        source = parts[1] if len(parts) > 1 else "Unknown"
+
+                        st.markdown(f"**{headline}**")
+                        st.caption(f"📍 {source} | 🕒 {item.published[:16]}")
+                        st.link_button("Read Source", item.link, use_container_width=True)
+        else:
+            st.warning("No articles found. Try a broader keyword.")
+
+# ---------------- 8. FOOTER / FEEDBACK ----------------
 st.divider()
 with st.expander("💬 Feedback & Feature Requests"):
     f_text = st.text_area("What else do you need for your niche research?")
     if st.button("Send Feedback"):
-        st.success("Feedback received! We're building this for you.")
+        st.success("Feedback received!")
+
 
 
