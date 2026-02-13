@@ -1,6 +1,61 @@
 import streamlit as st
 import feedparser
 import urllib.parse
+from datetime import datetime, timezone, timedelta
+
+from rapidfuzz import fuzz
+
+
+def trending_score(group):
+    """
+    Calculates mentions per hour for a grouped story
+    """
+    first_seen = min(item["published"] for item in group["sources"])
+    hours_alive = max(
+        (datetime.now(timezone.utc) - first_seen).total_seconds() / 3600,
+        0.25  # prevent division by zero / very small values
+    )
+
+    return round(len(group["sources"]) / hours_alive, 2)
+
+
+
+def clean_headline(text):
+    return text.lower().strip()
+
+def group_articles(articles, threshold=80):
+    groups = []
+
+    for art in articles:
+        clean_title = clean_headline(art["title"])
+        matched = False
+
+        for g in groups:
+            score = fuzz.token_set_ratio(clean_title, g["clean_title"])
+            if score >= threshold:
+                g["sources"].append(art)
+                matched = True
+                break
+
+        if not matched:
+            groups.append({
+                "clean_title": clean_title,
+                "sources": [art]
+            })
+
+    return groups
+
+from datetime import datetime, timezone
+
+def trending_score(group):
+    first_seen = min(item["published"] for item in group["sources"])
+    
+    hours_alive = max(
+        (datetime.now(timezone.utc) - first_seen).total_seconds() / 3600,
+        0.25  # prevents divide-by-zero
+    )
+
+    return round(len(group["sources"]) / hours_alive, 2)
 
 # ---------------- 1. PAGE SETUP & STYLING ----------------
 st.set_page_config(
@@ -9,6 +64,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 
 # Enhanced CSS for modern, professional look
 st.markdown("""
@@ -235,66 +291,8 @@ st.markdown("""
         margin: 1rem 0;
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     }
-    
-    .pro-card h2, .pro-card h3 {
-        color: #f0f0f0;
-    }
-    
-    .pro-card ul li {
-        color: #d4d4d4;
-    }
-    
-    /* Article headline - light text */
-    .article-headline {
-        font-size: 16px;
-        font-weight: 600;
-        color: #e8e8e8;
-        line-height: 1.5;
-        margin-bottom: 0.5rem;
-    }
-    
-    /* Article meta - gray text */
-    .article-meta {
-        display: flex;
-        gap: 1rem;
-        align-items: center;
-        color: #a0a0a0;
-        font-size: 13px;
-    }
-    
-    /* Text area */
-    .stTextArea textarea {
-        background: #383838 !important;
-        color: #e8e8e8 !important;
-        border: 1px solid #4a4a4a !important;
-    }
-    
-    .stTextArea textarea:focus {
-        border-color: #6a6a6a !important;
-        background: #404040 !important;
-    }
-    
-    /* Select boxes */
-    [data-baseweb="select"] {
-        background: #383838;
-    }
-    
-    [data-baseweb="select"] > div {
-        background: #383838 !important;
-        border-color: #4a4a4a !important;
-        color: #e8e8e8 !important;
-    }
-    
-    /* Slider */
-    [data-testid="stSlider"] {
-        color: #b8b8b8;
-    }
-    
-    .stSlider [role="slider"] {
-        background: #6a6a6a;
-    }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 
 # ---------------- 2. CONSTANTS & CACHING ----------------
@@ -328,35 +326,41 @@ section.main > div:first-child {
 </style>
 """, unsafe_allow_html=True)
 
-    _, center, _ = st.columns([1, 2, 1])
-    with center:
-        st.markdown('<div class="login-container">', unsafe_allow_html=True)
-        st.markdown("# 📡 NichePulse Pro")
-        st.markdown("### Your intelligent niche research companion")
-        st.caption("Monitor trending topics, track emerging stories, and stay ahead of the curve.")
+    st.markdown("# 📡 NichePulse Pro")
+    st.markdown("### Your intelligent niche research companion")
+    st.caption("Monitor trending topics, track emerging stories, and stay ahead of the curve.")
         
-        st.markdown("<br>", unsafe_allow_html=True)
-        email = st.text_input("Email Address", placeholder="journalist@news.com", label_visibility="collapsed", key="login_email")
+    st.markdown("<br>", unsafe_allow_html=True)
+    email = st.text_input("Email Address", placeholder="journalist@news.com", label_visibility="collapsed", key="login_email")
         
-        if st.button("🚀 Start Researching", use_container_width=True):
-            if "@" in email and "." in email:
-                st.session_state.user_email = email
-                st.rerun()
-            else:
-                st.error("⚠️ Please enter a valid email address.")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("🔒 Your email is only used for account identification. We respect your privacy.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    if st.button("🚀 Start Researching", use_container_width=True):
+        if "@" in email and "." in email:
+            st.session_state.user_email = email
+            st.rerun()
+        else:
+            st.error("⚠️ Please enter a valid email address.")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.caption("🔒 Your email is only used for account identification. We respect your privacy.")
     st.stop()
 
 # ---------------- 5. SIDEBAR (Settings) ----------------
 with st.sidebar:
-    st.markdown("# ⚙️ Settings")
-    st.info(f"👤 **{st.session_state.user_email}**")
-    
+    st.markdown("## ⚙️ Settings")
+
+    timeframe = st.selectbox(
+        "Timeframe",
+        ["Last 1 hour", "Last 6 hours", "Last 24 hours", "Last 7 days"]
+    )
+
+    st.markdown("### Display")
+    num_articles = st.slider("Articles to show", 4, 30, 10)
+
     st.markdown("<br>", unsafe_allow_html=True)
-    
+    if st.button("Logout"):
+        st.session_state.clear()
+        st.rerun()
+
     st.markdown("### 🌍 Region & Time")
     region = st.selectbox("News Region", ["en-IN", "en-US", "en-GB", "en-CA", "en-AU"], 
                           format_func=lambda x: {
@@ -366,26 +370,9 @@ with st.sidebar:
                               "en-CA": "🇨🇦 Canada",
                               "en-AU": "🇦🇺 Australia"
                           }[x])
-    
-    timeframe = st.selectbox("Time Range", ["anytime", "1h", "24h", "7d", "30d"],
-                            format_func=lambda x: {
-                                "anytime": "📅 Any time",
-                                "1h": "🕐 Last hour",
-                                "24h": "📆 Last 24 hours",
-                                "7d": "📊 Last 7 days",
-                                "30d": "📈 Last 30 days"
-                            }[x])
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("### 📊 Display")
-    num_articles = st.slider("Articles to show", 4, 30, 10)
-    
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("🚪 Logout", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
 
 # ---------------- 6. HEADER & METRICS ----------------
+
 st.markdown("# 📰 NichePulse Pro")
 st.caption("Real-time niche monitoring powered by Google News")
 st.markdown("---")
@@ -400,14 +387,7 @@ with col1:
 
 with col2:
     st.markdown("### ⏰ Time Range")
-    timeframe_display = {
-        "anytime": "📅 Any time",
-        "1h": "🕐 Last hour",
-        "24h": "📆 Last 24 hours",
-        "7d": "📊 Last 7 days",
-        "30d": "📈 Last 30 days"
-    }
-    st.caption(timeframe_display.get(timeframe, "Any time"))
+    st.caption(timeframe)
 
 with col3:
     region_name = {"IN": "India", "US": "USA", "GB": "UK", "CA": "Canada", "AU": "Australia"}[region.split("-")[1]]
@@ -451,7 +431,7 @@ if is_new_search and st.session_state.search_count >= FREE_LIMIT:
         st.button("🎁 3 months • ₹399", use_container_width=True)
 
     if st.button("🔔 Notify me when Pro launches", use_container_width=True):
-        st.success(f"We’ll notify {st.session_state.user_email}")
+        st.success(f"We'll notify {st.session_state.user_email}")
 
     st.stop()  # ⛔ NOTHING below should run
 
@@ -460,50 +440,145 @@ if is_new_search:
     st.session_state.search_count += 1
     st.session_state.last_query = niche
 
-# 6️⃣ NOW build query & fetch articles
+# 6️⃣ BUILD QUERY & FETCH
 query = niche
 encoded = urllib.parse.quote(query)
 hl, gl = region.split("-")
 rss_url = f"https://news.google.com/rss/search?q={encoded}&hl={hl}&gl={gl}&ceid={gl}:{hl}"
 
-feed = fetch_news(rss_url)
-
-
 with st.spinner(f"🔍 Scanning for '{niche}'..."):
-        feed = fetch_news(rss_url)
+    feed = fetch_news(rss_url)
 
-        if feed.entries:
-            total_found = len(feed.entries)
-            shown = min(total_found, num_articles)
+# 7️⃣ FILTER ONLY FRESH NEWS
+TIME_RANGES = {
+    "Last 1 hour": 1,
+    "Last 6 hours": 6,
+    "Last 24 hours": 24,
+    "Last 7 days": 168,
+}
 
-            st.success(f"📰 Found **{total_found}** articles • Showing {shown}")
-            st.markdown("<br>", unsafe_allow_html=True)
+MAX_AGE_HOURS = TIME_RANGES.get(timeframe, 24)
 
-            col_count = 2 if shown > 1 else 1
-            cols = st.columns(col_count)
+fresh_articles = []
+now = datetime.now(timezone.utc)
 
-            for i, item in enumerate(feed.entries[:shown]):
-                with cols[i % col_count]:
-                    with st.container(border=True):
-                        parts = item.title.rsplit(" - ", 1)
-                        headline = parts[0]
-                        source = parts[1] if len(parts) > 1 else "Unknown Source"
-                        pub_date = item.published[:16] if hasattr(item, 'published') else "Unknown date"
+for e in feed.entries:
+    if not hasattr(e, "published_parsed"):
+        continue
 
-                        st.markdown(
-                            f'<div style="font-weight:600;font-size:16px;">{headline}</div>',
-                            unsafe_allow_html=True
-                        )
-                        st.markdown(
-                            f'<div style="opacity:0.8;">📍 {source} • 🕒 {pub_date}</div>',
-                            unsafe_allow_html=True
-                        )
-                        st.markdown("<br>", unsafe_allow_html=True)
+    published = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
 
-                        st.link_button("📖 Read Full Article", item.link, use_container_width=True)
-                        st.button("✨ Summarize (Pro)", key=f"sum_{i}", disabled=True)
-        else:
-            st.warning("🔍 No articles found. Try broader keywords or a different region.")
+    if now - published > timedelta(hours=MAX_AGE_HOURS):
+        continue
+
+    fresh_articles.append({
+        "title": e.title,
+        "link": e.link,
+        "source": e.source.title if hasattr(e, "source") else "Unknown",
+        "published": published
+    })
+
+if not fresh_articles:
+    st.warning(f"🕒 No fresh news in the selected timeframe ({timeframe}).")
+    st.stop()
+
+# 8️⃣ GROUP FRESH NEWS ONLY
+groups = group_articles(fresh_articles)
+
+groups = sorted(
+    groups,
+    key=lambda g: trending_score(g),
+    reverse=True
+)
+
+high_priority = []
+low_priority = []
+
+for g in groups:
+    score = trending_score(g)
+
+    # Low signal logic
+    if len(g["sources"]) == 1 and score < 0.5:
+        low_priority.append(g)
+    else:
+        high_priority.append(g)
+
+
+if not groups:
+    st.warning("🕒 No fresh stories for this time range.")
+    st.stop()
+
+# 🔥 Sort by trending score
+groups = sorted(
+    groups,
+    key=lambda g: trending_score(g),
+    reverse=True
+)
+
+high_priority = []
+low_priority = []
+
+for g in groups:
+    score = trending_score(g)
+
+    if len(g["sources"]) == 1 and score < 0.5:
+        low_priority.append(g)
+    else:
+        high_priority.append(g)
+
+tab1, tab2 = st.tabs(["🔥 Trending", "⚪ Low Signal"])
+
+# 🔥 Trending Tab
+with tab1:
+    if not high_priority:
+        st.info("No trending stories right now.")
+    else:
+        cols = st.columns(2)
+
+        for i, g in enumerate(high_priority[:num_articles]):
+            main = g["sources"][0]
+            source_count = len(g["sources"])
+            score = trending_score(g)
+
+            with cols[i % 2]:
+                with st.container(border=True):
+                    st.markdown(f"**{main['title']}**")
+
+                    if score >= 2:
+                        st.caption(f"🔥 Trending • {score} mentions/hr")
+                    elif score >= 0.8:
+                        st.caption(f"📈 Rising • {score} mentions/hr")
+                    else:
+                        st.caption(f"🟢 Developing • {score} mentions/hr")
+
+                    st.caption(
+                        f"📍 {main['source']} • 🕒 {main['published'].strftime('%H:%M')}"
+                    )
+
+                    st.link_button(
+                        "Read Article",
+                        main["link"],
+                        use_container_width=True
+                    )
+
+                    if source_count > 1:
+                        with st.expander(f"View {source_count - 1} more sources"):
+                            for extra in g["sources"][1:]:
+                                st.markdown(
+                                    f"- [{extra['source']}]({extra['link']})"
+                                )
+
+# ⚪ Low Signal Tab
+with tab2:
+    if not low_priority:
+        st.info("No low-signal stories.")
+    else:
+        for g in low_priority:
+            main = g["sources"][0]
+            st.markdown(f"• {main['title']}")
+
+
+
 
 # ---------------- 8. FOOTER / FEEDBACK ----------------
 st.markdown("<br><br>", unsafe_allow_html=True)
@@ -517,7 +592,8 @@ with st.expander("💬 Share Feedback & Feature Requests"):
         st.balloons()
 
 st.markdown("<br>", unsafe_allow_html=True)
-st.caption("Made with ❤️ by NichePulse Pro • Version 2.0")
+st.caption("Made with ❤️ by NichePulse Pro • Version 2")
+
 
 
 
